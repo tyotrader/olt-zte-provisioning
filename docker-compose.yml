@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # PHP Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: olt-app
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+      - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    networks:
+      - olt-network
+    depends_on:
+      - db
+      - redis
+
+  # Nginx Web Server
+  web:
+    image: nginx:alpine
+    container_name: olt-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./docker/nginx/ssl:/etc/nginx/ssl
+    networks:
+      - olt-network
+    depends_on:
+      - app
+
+  # MySQL Database
+  db:
+    image: mysql:8.0
+    container_name: olt-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: olt_provisioning
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_USER: oltuser
+      MYSQL_PASSWORD: oltpass
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - olt-network
+
+  # Redis Cache
+  redis:
+    image: redis:alpine
+    container_name: olt-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - olt-network
+
+  # Queue Worker
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: olt-queue
+    restart: unless-stopped
+    command: php artisan queue:work --sleep=3 --tries=3
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+    networks:
+      - olt-network
+    depends_on:
+      - db
+      - redis
+
+  # Scheduler
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: olt-scheduler
+    restart: unless-stopped
+    command: sh -c "while true; do php artisan schedule:run; sleep 60; done"
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+    networks:
+      - olt-network
+    depends_on:
+      - db
+
+volumes:
+  db_data:
+
+networks:
+  olt-network:
+    driver: bridge
