@@ -260,4 +260,4 @@ For support and feature requests, please contact your system administrator or cr
 
 ## Credits
 
-Developed for ISP Network Operations by Smart OLT Team.
+Developed for ISP Network Operations by lmn team
