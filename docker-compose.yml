@@ -10,13 +10,27 @@ services:
     restart: unless-stopped
     working_dir: /var/www
     volumes:
-      - ./:/var/www
+      - ./:/var/www:cached
       - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
     networks:
       - olt-network
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - OPCACHE_ENABLE=1
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
 
   # Nginx Web Server
   web:
@@ -27,13 +41,23 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./:/var/www
-      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
-      - ./docker/nginx/ssl:/etc/nginx/ssl
+      - ./:/var/www:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_cache:/var/cache/nginx
+      - nginx_logs:/var/log/nginx
     networks:
       - olt-network
     depends_on:
       - app
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
 
   # MySQL Database
   db:
@@ -45,40 +69,93 @@ services:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_USER: oltuser
       MYSQL_PASSWORD: oltpass
+      MYSQL_ROOT_HOST: '%'
     volumes:
       - db_data:/var/lib/mysql
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/custom.cnf:ro
     ports:
       - "3306:3306"
     networks:
       - olt-network
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --innodb-buffer-pool-size=512M
+      --innodb-log-file-size=128M
+      --innodb-flush-log-at-trx-commit=2
+      --innodb-flush-method=O_DIRECT
+      --max-connections=200
+      --thread-cache-size=50
+      --query-cache-type=1
+      --query-cache-size=64M
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
 
   # Redis Cache
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: olt-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
     networks:
       - olt-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
-  # Queue Worker
+  # Queue Worker (with Supervisor for multiple workers)
   queue:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: olt-queue
     restart: unless-stopped
-    command: php artisan queue:work --sleep=3 --tries=3
     working_dir: /var/www
     volumes:
-      - ./:/var/www
+      - ./:/var/www:cached
+      - ./docker/supervisor/supervisord.conf:/etc/supervisor/conf.d/supervisord.conf:ro
+    command: /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
     networks:
       - olt-network
     depends_on:
       - db
       - redis
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
   # Scheduler
   scheduler:
@@ -90,15 +167,34 @@ services:
     command: sh -c "while true; do php artisan schedule:run; sleep 60; done"
     working_dir: /var/www
     volumes:
-      - ./:/var/www
+      - ./:/var/www:cached
     networks:
       - olt-network
     depends_on:
       - db
+      - redis
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
 volumes:
   db_data:
+    driver: local
+  redis_data:
+    driver: local
+  nginx_cache:
+    driver: local
+  nginx_logs:
+    driver: local
 
 networks:
   olt-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
