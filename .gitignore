@@ -1,0 +1,46 @@
+```
+# Dependencies
+vendor/
+node_modules/
+
+# Build artifacts
+build/
+dist/
+target/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.coverage
+coverage/
+htmlcov/
+
+# Database
+*.sqlite
+*.db
+
+# Docker
+.dockerenv
+```
